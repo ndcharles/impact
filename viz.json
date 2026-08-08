@@ -1,0 +1,31 @@
+{
+  "data": [
+    {
+      "id": "concepts",
+      "label": "Data Fields",
+      "elements": [
+        { "id": "lat", "label": "Latitude", "type": "DIMENSION", "options": { "min": 1, "max": 1 } },
+        { "id": "lng", "label": "Longitude", "type": "DIMENSION", "options": { "min": 1, "max": 1 } },
+        { "id": "name", "label": "Name / Title", "type": "DIMENSION", "options": { "min": 0, "max": 1 } },
+        { "id": "price", "label": "Price", "type": "METRIC", "options": { "min": 0, "max": 1 } },
+        { "id": "image", "label": "Image URL", "type": "DIMENSION", "options": { "min": 0, "max": 1 } },
+        { "id": "amenities", "label": "Amenities", "type": "DIMENSION", "options": { "min": 0, "max": 1 } }
+      ]
+    }
+  ],
+  "style": [
+    {
+      "id": "mapStyle",
+      "label": "Map Style",
+      "elements": [
+        {
+          "id": "bubbleColor",
+          "label": "Bubble Color",
+          "type": "FILL_COLOR",
+          "defaultValue": "#3aaab9"
+        }
+      ]
+    }
+  ],
+  "interactions": []
+}

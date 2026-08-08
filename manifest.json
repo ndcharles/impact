@@ -1,0 +1,25 @@
+{
+  "name": "Property Map Package",
+  "organization": "Ndcharles",
+  "description": "Interactive property bubble map with click-to-open detail panel",
+  "logoUrl": "https://placehold.co/120x120.png?text=VIZ",
+  "organizationUrl": "https://linke.ro/ndcharles",
+  "supportUrl": "https://ndcharles.github.io",
+  "privacyPolicyUrl": "https://linke.ro/ndcharles",
+  "termsOfServiceUrl": "https://linke.ro/ndcharles",
+  "packageUrl": "https://ndcharles.github.io",
+  "devMode": true,
+  "components": [
+    {
+      "id": "propertyMap",
+      "name": "Property Map",
+      "description": "Interactive property bubble map with click-to-open detail panel",
+      "iconUrl": "https://placehold.co/120x120.png?text=MAP",
+      "resource": {
+        "js": "https://ndcharles.github.io/lookerstudio-viz/viz.js",
+        "config": "https://ndcharles.github.io/lookerstudio-viz/viz.json",
+        "css": "https://ndcharles.github.io/lookerstudio-viz/viz.css"
+      }
+    }
+  ]
+}
