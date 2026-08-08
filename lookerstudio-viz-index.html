@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Property Map Viz</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html,body{height:100%;margin:0;padding:0;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#333;}
+  #app{display:flex;width:100%;height:100%;overflow:hidden;background:#f7f7f5;}
+  #mapwrap{position:relative;flex:1 1 auto;height:100%;}
+  #map{width:100%;height:100%;}
+  /* ---- detail panel: hidden until a bubble is clicked ---- */
+  #panel{flex:0 0 0%;width:0;height:100%;overflow:hidden;background:#fbfbfa;
+         transition:width .3s ease,flex-basis .3s ease;box-shadow:-2px 0 8px rgba(0,0,0,.10);}
+  #panel.open{flex:0 0 40%;width:40%;}
+  #panel-inner{width:100%;min-width:280px;height:100%;overflow-y:auto;
+               padding:18px 24px;box-sizing:border-box;}
+  #panel-close{float:right;border:none;background:none;font-size:16px;cursor:pointer;color:#888;}
+  #panel h2{text-align:center;color:#555;font-size:20px;margin:6px 0 2px;}
+  .loc{text-align:center;font-style:italic;color:#555;margin-bottom:10px;}
+  .rule{border-bottom:2px solid #444;width:70%;margin:0 auto 14px;}
+  #panel img{width:100%;border:1px solid #ddd;box-sizing:border-box;margin:0 0 14px;background:#eee;}
+  .grid{display:flex;gap:20px;}
+  .col{flex:1;min-width:0;}
+  .strong{font-weight:700;}
+  .muted{color:#888;font-size:12px;}
+  .col ul{margin:6px 0;padding-left:20px;line-height:1.5;}
+  .contact{display:block;background:#4a4a4a;color:#fff;border-radius:4px;text-align:center;
+           padding:8px 10px;text-decoration:none;margin:12px 0;font-weight:600;font-size:14px;}
+  .epc{margin-top:6px;border:1px solid #ddd;padding:8px;box-sizing:border-box;}
+  .epc-row{display:flex;align-items:center;margin:2px 0;}
+  .epc-bar{height:14px;color:#fff;font-size:10px;line-height:14px;padding-left:6px;
+           border-radius:0 7px 7px 0;box-sizing:border-box;}
+  .epc-bar.active{outline:2px solid #222;}
+  #hint{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;
+        background:#fff;border:1px solid #ccc;border-radius:6px;padding:8px 14px;
+        font-size:13px;color:#555;box-shadow:0 1px 4px rgba(0,0,0,.15);}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="mapwrap">
+    <div id="map"></div>
+    <div id="hint" style="display:none">No data yet — add fields in the data panel.
+      (Opening this file directly in a browser shows 1,000 demo points.)</div>
+  </div>
+  <aside id="panel"><div id="panel-inner"></div></aside>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* Looker Studio injects its component API into this iframe.
+   The global is exposed as 'ds-component' (alias 'dscomponent') — this line
+   is the ONLY place you'd ever touch if Google changes the naming. */
+var ds = window['ds-component'] || window.dscomponent || null;
+
+var BUBBLE_FILL = 'rgba(58,166,185,0.75)', BUBBLE_EDGE = '#2b8ca0', BUBBLE_R = 7;
+
+var map = null, markersLayer = null, fitted = false;
+
+/* ---------------- helpers ---------------- */
+function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g,function(s){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]; }); }
+
+function fmtPrice(v){ var n=Number(v);
+  return isFinite(n)&&v!==''&&v!=null ? '£'+n.toLocaleString('en-GB') : esc(v); }
+
+/* Accept either the Looker table shape {fields,rows} or a Google Charts DataTable. */
+function normalizeTable(t){
+  if (t && Array.isArray(t.fields) && Array.isArray(t.rows)) return t;
+  if (t && typeof t.getNumberOfRows==='function'){
+    var fields=[],rows=[],c,r;
+    for(c=0;c<t.getNumberOfColumns();c++)
+      fields.push({id:String(c),name:(t.getColumnLabel&&t.getColumnLabel(c))||String(c)});
+    for(r=0;r<t.getNumberOfRows();r++){
+      var row=[]; for(c=0;c<fields.length;c++) row.push(t.getValue(r,c)); rows.push(row);
+    }
+    return {fields:fields,rows:rows};
+  }
+  return {fields:[],rows:[]};
+}
+
+function fieldIndex(fields,re){
+  for(var i=0;i<fields.length;i++){
+    var k=String(fields[i].name||fields[i].id||'').toLowerCase();
+    if(re.test(k)) return i;
+  }
+  return -1;
+}
+
+/* Map whatever columns the user wired up, by header name. */
+function parseRows(table){
+  var f=table.fields;
+  var ix={
+    lat:fieldIndex(f,/lat/),           lng:fieldIndex(f,/lng|lon/),
+    name:fieldIndex(f,/name|title|address/), post:fieldIndex(f,/post|zip/),
+    price:fieldIndex(f,/price/),       image:fieldIndex(f,/image|img|photo|pic/),
+    avail:fieldIndex(f,/avail/),       area:fieldIndex(f,/sqft|floor|area/),
+    deposit:fieldIndex(f,/deposit/),   stay:fieldIndex(f,/stay|month/),
+    amen:fieldIndex(f,/amen|feature/), epc:fieldIndex(f,/epc|energy|rating/),
+    phone:fieldIndex(f,/phone|tel|contact/)
+  };
+  var out=[];
+  (table.rows||[]).forEach(function(r){
+    function g(k){ return ix[k]>=0 ? r[ix[k]] : undefined; }
+    var lat=parseFloat(g('lat')), lng=parseFloat(g('lng'));
+    if(isFinite(lat)&&isFinite(lng)) out.push({
+      lat:lat,lng:lng,name:g('name'),post:g('post'),price:g('price'),
+      image:g('image'),avail:g('avail'),area:g('area'),deposit:g('deposit'),
+      stay:g('stay'),amenities:g('amen'),epc:g('epc'),phone:g('phone')
+    });
+  });
+  return out;
+}
+
+/* ---------------- map ---------------- */
+function initMap(){
+  if(map){ map.remove(); map=null; }
+  map=L.map('map',{zoomControl:true});
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{
+    attribution:'© OpenStreetMap contributors © CARTO',maxZoom:20}).addTo(map);
+  markersLayer=L.layerGroup().addTo(map);
+}
+
+function renderRows(rows){
+  markersLayer.clearLayers();
+  document.getElementById('hint').style.display = rows.length? 'none':'block';
+  rows.forEach(function(r){
+    L.circleMarker([r.lat,r.lng],{radius:BUBBLE_R,color:BUBBLE_EDGE,weight:1,
+      fillColor:BUBBLE_FILL,fillOpacity:1})
+      .on('click',function(){ openPanel(r); })
+      .addTo(markersLayer);
+  });
+  if(rows.length && !fitted){
+    map.fitBounds(L.latLngBounds(rows.map(function(r){return [r.lat,r.lng];})),{padding:[20,20]});
+    fitted=true;
+  }
+  map.invalidateSize();
+}
+
+/* ---------------- detail panel (hidden until click, 40% wide) ---------------- */
+var panel=document.getElementById('panel'),
+    inner=document.getElementById('panel-inner');
+
+function openPanel(r){
+  inner.innerHTML=panelHTML(r);
+  inner.querySelector('#panel-close').onclick=closePanel;
+  if(!panel.classList.contains('open')){
+    panel.classList.add('open');
+    setTimeout(function(){ map.invalidateSize(); },320);
+  }
+}
+function closePanel(){
+  panel.classList.remove('open');
+  setTimeout(function(){ map.invalidateSize(); },320);
+}
+
+var EPC=[['A+++','#007a33',40],['A++','#009a44',48],['A+','#4cb84c',56],
+         ['B','#8cc63f',64],['C','#c6d53f',72],['D','#ffd500',80],['E','#f7a600',88]];
+
+function epcHTML(rating){
+  if(!rating) return '';
+  var r=String(rating).trim().toUpperCase();
+  return '<div class="epc">'+EPC.map(function(b){
+    var active=(r===b[0]||r.indexOf(b[0])===0||b[0].indexOf(r)===0);
+    return '<div class="epc-row"><div class="epc-bar'+(active?' active':'')+
+           '" style="width:'+b[2]+'%;background:'+b[1]+'">'+b[0]+'</div></div>';
+  }).join('')+'</div>';
+}
+
+function panelHTML(r){
+  var amen=String(r.amenities||'').split(/[,|;]/).map(function(s){return s.trim();})
+            .filter(Boolean);
+  return '<button id="panel-close" title="Close">✕</button>'+
+    '<h2>'+esc(r.name||'Listing')+'</h2>'+
+    '<div class="loc">Located in <em>'+esc(r.post||'—')+'</em> 📍</div>'+
+    '<div class="rule"></div>'+
+    '<img src="'+esc(r.image||'')+'" alt="" '+
+      'onerror="this.onerror=null;this.src=\'https://picsum.photos/seed/fallback/640/420\';"/>'+
+    '<div class="grid"><div class="col">'+
+      '<p><span class="strong">📅 Available from '+esc(r.avail||'—')+'</span></p>'+
+      '<p><span class="strong">Total floor area:</span> '+esc(r.area||'—')+
+        ' <span class="muted">sq. ft.</span></p>'+
+      '<p class="strong">Amenities:</p><ul>'+
+      (amen.map(function(a){return '<li>'+esc(a)+'</li>';}).join('')||'<li>—</li>')+
+      '</ul></div><div class="col">'+
+      '<p><span class="strong">Price:</span> '+fmtPrice(r.price)+'</p>'+
+      '<p><span class="strong">Deposit:</span> '+esc(r.deposit||'—')+'</p>'+
+      '<p><span class="strong">Minimum stay:</span> '+esc(r.stay||'—')+'</p>'+
+      '<a class="contact" href="tel:'+esc(String(r.phone||'').replace(/\s/g,''))+'">'+
+        '📞 Contact: '+esc(r.phone||'')+'</a>'+
+      epcHTML(r.epc)+
+    '</div></div>';
+}
+
+/* ---------------- live data ( Looker Studio) ---------------- */
+if (ds && typeof ds.registerCallback === 'function') {
+  var render = function () {
+    renderRows(parseRows(normalizeTable(ds.getTable())));
+  };
+  ds.registerCallback(render);
+  render();
+  if (ds.setVizReady) ds.setVizReady(true);
+} else {
+  document.getElementById('hint').style.display = 'block'; // not inside Looker Studio
+}
+
+/* ---------------- boot ---------------- */
+initMap();
+window.addEventListener('resize',function(){ if(map) map.invalidateSize(); });
+
+if(ds && typeof ds.registerCallback==='function'){
+  var render=function(){
+    var t=normalizeTable(ds.getTable());
+    renderRows(parseRows(t));
+  };
+  ds.registerCallback(render);
+  render();
+  if(ds.setVizReady) ds.setVizReady(true);
+}else{
+  renderRows(parseRows(demoTable()));   // opened outside Looker Studio → demo mode
+}
+})();
+</script>
+</body>
+</html>
